@@ -63,7 +63,7 @@ public class OMTZHModifier {
 			ResultSet rs = s
 					.executeQuery("select id, osm_id, name, tags->'name:zh' as zh, tags->'name:zh-Hans' as hans, "
 							+ "tags->'names:zh-Hant' as hant from " + table + " where id BETWEEN " + i + " AND "
-							+ (i + size - 1) + " AND (tags->'name:zh-Hant' IS NULL OR tags->'name:zh:Hans' IS NULL);");
+							+ (i + size - 1) + " AND (tags->'name:zh-Hant' IS NULL OR tags->'name:zh-Hans' IS NULL);");
 
 			List<ChineseValues> updates = new ArrayList<>();
 			while (rs.next()) {
