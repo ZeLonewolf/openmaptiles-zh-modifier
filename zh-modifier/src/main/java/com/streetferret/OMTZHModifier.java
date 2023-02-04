@@ -1,11 +1,15 @@
 package com.streetferret;
 
 import java.sql.Connection;
+import java.sql.DatabaseMetaData;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.text.DecimalFormat;
+import java.text.NumberFormat;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 import com.ibm.icu.text.Transliterator;
@@ -19,13 +23,6 @@ public class OMTZHModifier {
 
 	public static void main(String[] args) {
 
-//		Enumeration<String> ids = com.ibm.icu.text.Transliterator.getAvailableIDs();
-//
-//		while(ids.hasMoreElements()) {
-//			System.out.println(ids.nextElement());
-//		}
-//		System.exit(0);
-
 		Connection c = null;
 		try {
 			Class.forName("org.postgresql.Driver");
@@ -37,10 +34,58 @@ public class OMTZHModifier {
 			System.err.println(e.getClass().getName() + ": " + e.getMessage());
 			System.exit(0);
 		}
+		
+		//Required indexes:
+		//create index oal_id on osm_aerialway_linestring(id)
+		//create index ohl_id on osm_highway_linestring(id)
+		//create index opp_id on osm_poi_point(id)
 	}
 
 	private static void process(Connection c) throws SQLException {
-		processTable(c, "osm_highway_linestring");
+
+		DatabaseMetaData metaData = c.getMetaData();
+		String[] types = { "TABLE" };
+
+		List<String> tables = new ArrayList<>();
+		ResultSet rs = metaData.getTables(null, null, "%", types);
+		while (rs.next()) {
+			tables.add(rs.getString("TABLE_NAME"));
+		}
+
+		List<String> tablesToModify = new ArrayList<>();
+		for (String table : tables) {
+			ResultSet resultSet = metaData.getColumns(null, null, table, null);
+			boolean hasId = false;
+			boolean hasName = false;
+			boolean hasTags = false;
+			while (resultSet.next()) {
+				String name = resultSet.getString("COLUMN_NAME");
+				if (name.equals("id")) {
+					hasId = true;
+				}
+				if (name.equals("name")) {
+					hasName = true;
+				}
+				if (name.equals("tags")) {
+					hasTags = true;
+				}
+			}
+			if (hasId && hasName && hasTags) {
+				tablesToModify.add(table);
+			}
+		}
+
+		System.out.println("Found " + tablesToModify.size() + " tables to update");
+
+		tablesToModify.forEach(table -> {
+			try {
+				processTable(c, table);
+			} catch (SQLException e) {
+				e.printStackTrace();
+				System.exit(0);
+			}
+		});
+
 	}
 
 	private static long getMaxID(Connection c, String table) throws SQLException {
@@ -50,20 +95,27 @@ public class OMTZHModifier {
 		return rs.getLong("max_id");
 	}
 
+	private static NumberFormat fmtPct = new DecimalFormat("##.##");
+
 	private static void processTable(Connection c, String table) throws SQLException {
+
+		System.out.println("Adding zh tags to [" + table + "]");
 
 		long maxID = getMaxID(c, table);
 
-		long size = 100000;
+		long size = 20000;
+
+		Statement s = c.createStatement();
 
 		for (long i = 0; i < maxID; i += size) {
-			System.out.println("Batch " + i + " to " + (i + size - 1));
+			System.out.println("Batch " + i + " to " + (i + size - 1) + " of " + String.valueOf(maxID) + " ("
+					+ fmtPct.format(100f * i / maxID) + "%) -- " + table);
 
-			Statement s = c.createStatement();
 			ResultSet rs = s
 					.executeQuery("select id, osm_id, name, tags->'name:zh' as zh, tags->'name:zh-Hans' as hans, "
 							+ "tags->'names:zh-Hant' as hant from " + table + " where id BETWEEN " + i + " AND "
-							+ (i + size - 1) + " AND (tags->'name:zh-Hant' IS NULL OR tags->'name:zh-Hans' IS NULL);");
+							+ (i + size - 1) + " AND (name is NOT NULL or tags->'name:zh' IS NOT NULL) AND "
+							+ "(tags->'name:zh-Hant' IS NULL OR tags->'name:zh-Hans' IS NULL);");
 
 			List<ChineseValues> updates = new ArrayList<>();
 			while (rs.next()) {
@@ -73,24 +125,44 @@ public class OMTZHModifier {
 				}
 			}
 
-			s.close();
-			
-			System.out.println("Found " + updates.size() + " matches");
+			rs.close();
 
-			updates.forEach(cv -> updateChineseValues(c, cv));
+			if (!updates.isEmpty()) {
+				System.out.println("  Found " + updates.size() + " matches");
+			}
+
+			long timing = System.currentTimeMillis();
+
+			updates.stream()
+					.map(cv -> "update " + table + " SET tags = tags || 'name:zh-Hans => " + hstoreEscape(cv.getHans())
+							+ "'::hstore || 'name:zh-Hant => " + hstoreEscape(cv.getHant()) + "'::hstore WHERE id = "
+							+ cv.getId())
+					.forEach(sql -> {
+						try {
+							s.addBatch(sql);
+						} catch (SQLException e) {
+							// TODO Auto-generated catch block
+							e.printStackTrace();
+						}
+					});
+
+			int[] results = s.executeBatch();
+			int updateCount = Arrays.stream(results).sum();
+
+			if (updateCount > 0) {
+				timing = System.currentTimeMillis() - timing;
+				int recPerSec = (int) ((float) updateCount / (timing / 1000f));
+				System.out.println("  Updated " + updateCount + " records, " + recPerSec + "/s");
+			}
+
+			s.clearBatch();
 		}
+
+		s.close();
 	}
 
-	private static void updateChineseValues(Connection c, ChineseValues cv) {
-		String updateSQL = "update osm_highway_linestring SET tags = tags || 'name:zh-Hans => " + cv.getHans()
-				+ "'::hstore || 'name:zh-Hant => " + cv.getHant() + "'::hstore WHERE id = " + cv.getId();
-		try {
-			Statement s = c.createStatement();
-			s.execute(updateSQL);
-			System.out.println(" -> update " + cv.getId());
-		} catch (SQLException e) {
-			e.printStackTrace();
-		}
+	private static String hstoreEscape(String s) {
+		return s.replace(" ", "\\ ").replace("'", "''").replace(",", "\\,");
 	}
 
 	private static ChineseValues processRecord(ResultSet rs) throws SQLException {
