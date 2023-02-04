@@ -34,11 +34,13 @@ public class OMTZHModifier {
 			System.err.println(e.getClass().getName() + ": " + e.getMessage());
 			System.exit(0);
 		}
-		
-		//Required indexes:
-		//create index oal_id on osm_aerialway_linestring(id)
-		//create index ohl_id on osm_highway_linestring(id)
-		//create index opp_id on osm_poi_point(id)
+
+		// Required indexes:
+		// create index oal_id on osm_aerialway_linestring(id)
+		// create index ohl_id on osm_highway_linestring(id)
+		// create index opp_id on osm_poi_point(id)
+		// create index oppg_id on osm_poi_polygon(id)
+		// create index owl_id on osm_railway_linestring(id)
 	}
 
 	private static void process(Connection c) throws SQLException {
@@ -77,9 +79,21 @@ public class OMTZHModifier {
 
 		System.out.println("Found " + tablesToModify.size() + " tables to update");
 
+		Statement stmt = c.createStatement();
+		
 		tablesToModify.forEach(table -> {
+
+			String dropIndexSQL = "drop index if exists temp_zh_id;";
+			String createIndexSQL = "create index temp_zh_id on " + table + "(id);";
+			System.out.println(createIndexSQL);
+			
 			try {
+				System.out.print("Indexing " + table + "...");
+				stmt.execute(dropIndexSQL);
+				stmt.execute(createIndexSQL);
+				System.out.println("done!");
 				processTable(c, table);
+				stmt.execute(dropIndexSQL);
 			} catch (SQLException e) {
 				e.printStackTrace();
 				System.exit(0);
