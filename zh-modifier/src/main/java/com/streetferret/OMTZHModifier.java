@@ -17,6 +17,7 @@ import com.github.houbb.opencc4j.util.ZhConverterUtil;
 public class OMTZHModifier {
 
 	public static void main(String[] args) {
+
 		Connection c = null;
 		try {
 			Class.forName("org.postgresql.Driver");
@@ -41,14 +42,20 @@ public class OMTZHModifier {
 			tables.add(rs.getString("TABLE_NAME"));
 		}
 
-		List<String> tablesToModify = new ArrayList<>();
+		List<String> idTablesToModify = new ArrayList<>();
+		List<String> osmTablesToModify = new ArrayList<>();
+
 		for (String table : tables) {
 			ResultSet resultSet = metaData.getColumns(null, null, table, null);
 			boolean hasId = false;
+			boolean hasOsmId = false;
 			boolean hasName = false;
 			boolean hasTags = false;
 			while (resultSet.next()) {
 				String name = resultSet.getString("COLUMN_NAME");
+				if (name.equals("osm_id")) {
+					hasOsmId = true;
+				}
 				if (name.equals("id")) {
 					hasId = true;
 				}
@@ -60,53 +67,63 @@ public class OMTZHModifier {
 				}
 			}
 			if (hasId && hasName && hasTags) {
-				tablesToModify.add(table);
+				idTablesToModify.add(table);
+			} else if (hasOsmId && hasName && hasTags) {
+				osmTablesToModify.add(table);
 			}
 		}
 
-		System.out.println("Found " + tablesToModify.size() + " tables to update");
+		System.out.println("Found " + idTablesToModify.size() + " tables(id) to update");
+		System.out.println("Found " + osmTablesToModify.size() + " tables(osm_id) to update");
 
-		Statement stmt = c.createStatement();
-
-		tablesToModify.forEach(table -> {
-
-			String dropIndexSQL = "drop index if exists temp_zh_id;";
-			String createIndexSQL = "create index temp_zh_id on " + table + "(id);";
-
-			try {
-				System.out.print("Indexing " + table + "...");
-				stmt.execute(dropIndexSQL);
-				System.out.println(dropIndexSQL);
-				stmt.execute(createIndexSQL);
-				System.out.println(createIndexSQL);
-				System.out.println("done!");
-				processTable(c, table);
-				stmt.execute(dropIndexSQL);
-				System.out.println(dropIndexSQL);
-			} catch (SQLException e) {
-				e.printStackTrace();
-				System.exit(0);
-			}
-		});
+		idTablesToModify.forEach(table -> indexAndProcessTable(table, "id", c));
+		osmTablesToModify.forEach(table -> indexAndProcessTable(table, "osm_id", c));
 
 	}
 
-	private static long getMaxID(Connection c, String table) throws SQLException {
+	private static void indexAndProcessTable(String table, String idField, Connection c) {
+
+		try {
+			Statement stmt = c.createStatement();
+
+			String dropIndexSQL = "drop index if exists temp_zh_id;";
+			String createIndexSQL = "create index temp_zh_id on " + table + "(" + idField + ");";
+
+			System.out.print("Indexing " + table + "...");
+			stmt.execute(dropIndexSQL);
+			System.out.println(dropIndexSQL);
+			stmt.execute(createIndexSQL);
+			System.out.println(createIndexSQL);
+			System.out.println("done!");
+			processTable(c, table, idField);
+			stmt.execute(dropIndexSQL);
+			System.out.println(dropIndexSQL);
+		} catch (SQLException e) {
+			e.printStackTrace();
+			System.exit(0);
+		}
+	}
+
+	private static long getMaxID(Connection c, String table, String idField) throws SQLException {
 		Statement s = c.createStatement();
-		ResultSet rs = s.executeQuery("select max(id) as max_id from " + table + ";");
+		ResultSet rs = s.executeQuery("select max(" + idField + ") as max_id from " + table + ";");
 		rs.next();
 		return rs.getLong("max_id");
 	}
 
 	private static NumberFormat fmtPct = new DecimalFormat("##.##");
 
-	private static void processTable(Connection c, String table) throws SQLException {
+	private static void processTable(Connection c, String table, String idField) throws SQLException {
 
 		System.out.println("Adding zh tags to [" + table + "]");
 
-		long maxID = getMaxID(c, table);
+		long maxID = getMaxID(c, table, idField);
 
 		long size = 20000;
+
+		if (idField.equals("osm_id")) {
+			size = maxID / 100;
+		}
 
 		Statement s = c.createStatement();
 
@@ -115,14 +132,14 @@ public class OMTZHModifier {
 					+ fmtPct.format(100f * i / maxID) + "%) -- " + table);
 
 			ResultSet rs = s
-					.executeQuery("select id, osm_id, name, tags->'name:zh' as zh, tags->'name:zh-Hans' as hans, "
-							+ "tags->'names:zh-Hant' as hant from " + table + " where id BETWEEN " + i + " AND "
-							+ (i + size - 1) + " AND (name is NOT NULL or tags->'name:zh' IS NOT NULL) AND "
+					.executeQuery("select " + idField + ", name, tags->'name:zh' as zh, tags->'name:zh-Hans' as hans, "
+							+ "tags->'names:zh-Hant' as hant from " + table + " where " + idField + " BETWEEN " + i
+							+ " AND " + (i + size - 1) + " AND (name is NOT NULL or tags->'name:zh' IS NOT NULL) AND "
 							+ "(tags->'name:zh-Hant' IS NULL OR tags->'name:zh-Hans' IS NULL);");
 
 			List<ChineseValues> updates = new ArrayList<>();
 			while (rs.next()) {
-				ChineseValues results = processRecord(rs);
+				ChineseValues results = processRecord(rs, idField);
 				if (results != null) {
 					updates.add(results);
 				}
@@ -138,8 +155,8 @@ public class OMTZHModifier {
 
 			updates.stream()
 					.map(cv -> "update " + table + " SET tags = tags || 'name:zh-Hans => " + hstoreEscape(cv.getHans())
-							+ "'::hstore || 'name:zh-Hant => " + hstoreEscape(cv.getHant()) + "'::hstore WHERE id = "
-							+ cv.getId())
+							+ "'::hstore || 'name:zh-Hant => " + hstoreEscape(cv.getHant()) + "'::hstore WHERE "
+							+ idField + " = " + cv.getId())
 					.forEach(sql -> {
 						try {
 							s.addBatch(sql);
@@ -176,10 +193,17 @@ public class OMTZHModifier {
 		}
 	}
 
-	private static ChineseValues processRecord(ResultSet rs) throws SQLException {
+	private static ChineseValues processRecord(ResultSet rs, String idField) throws SQLException {
+		return processRecord(rs.getLong(idField), rs.getString("name"), rs.getString("zh"), rs.getString("hans"),
+				rs.getString("hant"));
+	}
 
-		String name = rs.getString("name");
-		String zh = rs.getString("zh");
+	private static ChineseValues processRecord(long id, String name, String izh, String ihans, String ihant) {
+
+		String zh = izh;
+		String hans = ihans;
+		String hant = ihant;
+
 		boolean needsUpdate = false;
 
 		if (zh == null) {
@@ -192,9 +216,6 @@ public class OMTZHModifier {
 				return null;
 			}
 		}
-
-		String hans = rs.getString("hans");
-		String hant = rs.getString("hant");
 
 		if (hans != null && hans.isEmpty()) {
 			hans = null;
@@ -217,8 +238,7 @@ public class OMTZHModifier {
 			ChineseValues cv = new ChineseValues();
 			cv.setHans(hans);
 			cv.setHant(hant);
-			cv.setId(rs.getLong("id"));
-
+			cv.setId(id);
 			return cv;
 		}
 		return null;
