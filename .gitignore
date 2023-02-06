@@ -24,5 +24,6 @@ hs_err_pid*
 
 zh-modifier/.settings
 zh-modifier/.classpath
+zh-modifier/bin
 
 .gradle

@@ -30,5 +30,4 @@ dependencies {
     implementation 'org.postgresql:postgresql:42.2.19'
     implementation 'com.ibm.icu:icu4j:51.1'
     implementation 'com.github.houbb:opencc4j:1.7.2'
-    
 }
