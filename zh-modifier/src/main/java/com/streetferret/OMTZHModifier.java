@@ -166,7 +166,8 @@ public class OMTZHModifier {
 
 	private static String hstoreEscape(String s) {
 		try {
-			return org.postgresql.core.Utils.escapeLiteral(null, s, false).toString().replaceAll("\\s+", "\\\\ ");
+			return org.postgresql.core.Utils.escapeLiteral(null, s, false).toString().replaceAll("\\s+", "\\\\ ")
+					.replace(",", "\\,").replace("\"", "\\\"");
 		} catch (SQLException e) {
 			e.printStackTrace();
 			// Something terrible has happened.
