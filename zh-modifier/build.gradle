@@ -15,9 +15,6 @@ plugins {
 repositories {
     // Use Maven Central for resolving dependencies.
     mavenCentral()
-      maven {
-            url "https://repo1.maven.org/maven2"
-        }
 }
 
 dependencies {
@@ -32,10 +29,6 @@ dependencies {
 
     implementation 'org.postgresql:postgresql:42.2.19'
     implementation 'com.ibm.icu:icu4j:51.1'
-    //implementation 'com.github.houbb:opencc4j:1.7.1'
-}
-
-tasks.named('test') {
-    // Use JUnit Platform for unit tests.
-    useJUnitPlatform()
+    implementation 'com.github.houbb:opencc4j:1.7.2'
+    
 }

@@ -254,6 +254,6 @@ public class OMTZHModifier {
 
 	public static boolean allHanScript(String s) {
 		return s.codePoints()
-				.allMatch(codepoint -> Character.UnicodeScript.of(codepoint) == Character.UnicodeScript.HAN);
+				.anyMatch(codepoint -> Character.UnicodeScript.of(codepoint) == Character.UnicodeScript.HAN);
 	}
 }
