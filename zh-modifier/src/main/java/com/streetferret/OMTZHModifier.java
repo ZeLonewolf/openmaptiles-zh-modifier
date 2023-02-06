@@ -12,17 +12,11 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-import com.ibm.icu.text.Transliterator;
+import com.github.houbb.opencc4j.util.ZhConverterUtil;
 
 public class OMTZHModifier {
 
-	private static Transliterator st = Transliterator.getInstance("Hans-Hant");
-	private static Transliterator ts = Transliterator.getInstance("Hant-Hans");
-	private static Transliterator at = Transliterator.getInstance("Any-Hant");
-	private static Transliterator as = Transliterator.getInstance("Any-Hans");
-
 	public static void main(String[] args) {
-
 		Connection c = null;
 		try {
 			Class.forName("org.postgresql.Driver");
@@ -34,13 +28,6 @@ public class OMTZHModifier {
 			System.err.println(e.getClass().getName() + ": " + e.getMessage());
 			System.exit(0);
 		}
-
-		// Required indexes:
-		// create index oal_id on osm_aerialway_linestring(id)
-		// create index ohl_id on osm_highway_linestring(id)
-		// create index opp_id on osm_poi_point(id)
-		// create index oppg_id on osm_poi_polygon(id)
-		// create index owl_id on osm_railway_linestring(id)
 	}
 
 	private static void process(Connection c) throws SQLException {
@@ -80,20 +67,22 @@ public class OMTZHModifier {
 		System.out.println("Found " + tablesToModify.size() + " tables to update");
 
 		Statement stmt = c.createStatement();
-		
+
 		tablesToModify.forEach(table -> {
 
 			String dropIndexSQL = "drop index if exists temp_zh_id;";
 			String createIndexSQL = "create index temp_zh_id on " + table + "(id);";
-			System.out.println(createIndexSQL);
-			
+
 			try {
 				System.out.print("Indexing " + table + "...");
 				stmt.execute(dropIndexSQL);
+				System.out.println(dropIndexSQL);
 				stmt.execute(createIndexSQL);
+				System.out.println(createIndexSQL);
 				System.out.println("done!");
 				processTable(c, table);
 				stmt.execute(dropIndexSQL);
+				System.out.println(dropIndexSQL);
 			} catch (SQLException e) {
 				e.printStackTrace();
 				System.exit(0);
@@ -176,7 +165,14 @@ public class OMTZHModifier {
 	}
 
 	private static String hstoreEscape(String s) {
-		return s.replace(" ", "\\ ").replace("'", "''").replace(",", "\\,");
+		try {
+			return org.postgresql.core.Utils.escapeLiteral(null, s, false).toString().replaceAll("\\s+", "\\\\ ");
+		} catch (SQLException e) {
+			e.printStackTrace();
+			// Something terrible has happened.
+			System.exit(0);
+			return s;
+		}
 	}
 
 	private static ChineseValues processRecord(ResultSet rs) throws SQLException {
@@ -189,7 +185,7 @@ public class OMTZHModifier {
 			if (name == null || name.isEmpty()) {
 				return null;
 			}
-			if (allHanScript(name)) {
+			if (isHanScript(name)) {
 				zh = name;
 			} else {
 				return null;
@@ -207,41 +203,16 @@ public class OMTZHModifier {
 		}
 
 		if (hans == null) {
-			String hansTrans = as.transliterate(zh);
-			if (zh.equals(hansTrans)) {
-				hans = hansTrans;
-				needsUpdate = true;
-			}
+			hans = ZhConverterUtil.toSimple(zh);
+			needsUpdate = true;
 		}
 
 		if (hant == null) {
-			String hantTrans = at.transliterate(zh);
-			if (zh.equals(hantTrans)) {
-				hant = hantTrans;
-				needsUpdate = true;
-			}
-		}
-
-		if (hans == null && hant != null) {
-			hans = ts.transliterate(hant);
-		}
-
-		if (hant == null && hans != null) {
-			hant = st.transliterate(hans);
-		}
-
-		if (hans != null && hant != null && !hans.equals(hant)) {
+			hant = ZhConverterUtil.toTraditional(zh);
+			needsUpdate = true;
 		}
 
 		if (needsUpdate) {
-//			if (!hans.equals(hant)) {
-//				System.out.println("Testing: [" + zh + "]");
-//				System.out.println(" Hans: [" + hans + "]");
-//				System.out.println(" Hant: [" + hant + "]");
-//				System.out.println(" OSM: [" + rs.getLong("osm_id") + "]");
-//				System.out.println(" ID: [" + rs.getLong("id") + "]");
-//			}
-
 			ChineseValues cv = new ChineseValues();
 			cv.setHans(hans);
 			cv.setHant(hant);
@@ -252,7 +223,7 @@ public class OMTZHModifier {
 		return null;
 	}
 
-	public static boolean allHanScript(String s) {
+	public static boolean isHanScript(String s) {
 		return s.codePoints()
 				.anyMatch(codepoint -> Character.UnicodeScript.of(codepoint) == Character.UnicodeScript.HAN);
 	}
